@@ -181,12 +181,43 @@ resource "aws_instance" "hcis_ec2" {
                     sudo chown -R jboss:jboss /hcis
                     sudo chmod -R 755 /hcis/
 
-                    echo " Descargar archivos de instalación desde S3 ⬇️ "
+                    echo "Descargar archivos de instalación desde S3 ⬇️ "
                     sudo chown -R ec2-user:ec2-user /home/jboss/
                     sudo chmod -R 755 /home/jboss/
                     BUCKET_NAME="${aws_s3_bucket.hcis_bucket.bucket}"
                     aws s3 cp s3://$BUCKET_NAME/instalacion_standalone_HCIS4.tar.gz /home/jboss/ || echo "ERROR: No se pudo descargar instalacion_standalone_HCIS4.tar.gz" >> /var/log/user_data.log
                     aws s3 cp s3://$BUCKET_NAME/hcis.ear /home/jboss/ || echo "ERROR: No se pudo descargar hcis.ear" >> /var/log/user_data.log
+
+                    sudo chown jboss:jboss /home/jboss/instalacion_standalone_HCIS4.tar.gz
+                    sudo chown jboss:jboss /home/jboss/hcis.ear
+
+                    echo "***** Descomprimir archivos de instalación ⏳ *****"
+                    sudo tar -xvzf /home/jboss/instalacion_standalone_HCIS4.tar.gz -C /home/jboss/ || { echo "❌ Error al descomprimir instalacion_standalone_HCIS4.tar.gz"; exit 1; }
+
+                    echo "****** Mover el .EAR a instalacion_standalone_HCIS4/ear/ y cambiar permisos ****"
+                    sudo mv /home/jboss/hcis.ear /home/jboss/instalacion_standalone_HCIS4/ear/ || { echo "❌ Error al mover hcis.ear"; exit 1; }
+                    sudo chmod -R 775 /home/jboss/instalacion_standalone_HCIS4/ || { echo "❌ Error al cambiar permisos"; exit 1; }
+
+                    echo "==== LLevar paquete jboss-eap-7.4 a /hcis/apps/ y descomprimir ====="
+                    cd /hcis/apps/ && sudo cp /home/jboss/instalacion_standalone_HCIS4/jboss/jboss-eap-7.4.0.zip . || { echo "❌ Error al copiar jboss-eap-7.4.0.zip"; exit 1; }
+                    sudo unzip jboss-eap-7.4.0.zip || { echo "❌ Error al descomprimir jboss-eap-7.4.0.zip"; exit 1; }
+                    sudo chown -R jboss:jboss /hcis/
+                    sudo chmod -R 775 /hcis/
+
+                    echo "Variables de entorno 🖥️"
+                    export JBOSS_HOME="/hcis/apps/jboss-eap-7.4"
+                    export INSTALL_DIR="/home/jboss/instalacion_standalone_HCIS4"
+                    export PATCH_FILE="$INSTALL_DIR/jboss/jboss-eap-7.4.2-patch.zip"
+
+                    cd $JBOSS_HOME/ && sudo cp /home/jboss/instalacion_standalone_HCIS4/scripts/scripts_standalone_hcis4.tar.gz .
+                    sudo tar -xvf scripts_standalone_hcis4.tar.gz
+                    sudo rm -rf $JBOSS_HOME/scripts_standalone_hcis4.tar.gz
+                    sudo chmod -R 750 $JBOSS_HOME/standalone/scripts/
+
+                    echo "Configurar jboss-cli 🚀 "
+                    sudo chmod 770 /hcis/logs
+                    sudo -u jboss nohup /hcis/apps/jboss-eap-7.4/bin/standalone.sh > /hcis/logs/jboss.log 2>&1 &
+                    sleep 60
 
 
 
