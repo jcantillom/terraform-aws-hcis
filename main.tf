@@ -205,21 +205,19 @@ resource "aws_instance" "hcis_ec2" {
                     sudo chmod -R 775 /hcis/
 
                     echo "Variables de entorno 🖥️"
+                    echo $JBOSS_HOME
                     export JBOSS_HOME="/hcis/apps/jboss-eap-7.4"
-                    export INSTALL_DIR="/home/jboss/instalacion_standalone_HCIS4"
-                    export PATCH_FILE="$INSTALL_DIR/jboss/jboss-eap-7.4.2-patch.zip"
+                    echo 'export JBOSS_HOME="/hcis/apps/jboss-eap-7.4"' | sudo tee -a /etc/profile
+                    source /etc/profile
 
+                    echo " ========== Instalar Scripts ============"
                     cd $JBOSS_HOME/ && sudo cp /home/jboss/instalacion_standalone_HCIS4/scripts/scripts_standalone_hcis4.tar.gz .
-                    sudo tar -xvf scripts_standalone_hcis4.tar.gz
+                    sudo tar -xvzf $JBOSS_HOME/scripts_standalone_hcis4.tar.gz
                     sudo rm -rf $JBOSS_HOME/scripts_standalone_hcis4.tar.gz
                     sudo chmod -R 750 $JBOSS_HOME/standalone/scripts/
 
                     echo "Configurar jboss-cli 🚀 "
-                    sudo chmod 770 /hcis/logs
-                    sudo -u jboss nohup /hcis/apps/jboss-eap-7.4/bin/standalone.sh > /hcis/logs/jboss.log 2>&1 &
-                    sleep 60
-
-
+                    sudo bash $JBOSS_HOME/bin/standalone.sh
 
             EOF
   user_data_replace_on_change = true
