@@ -217,7 +217,91 @@ resource "aws_instance" "hcis_ec2" {
                     sudo chmod -R 750 $JBOSS_HOME/standalone/scripts/
 
                     echo "Configurar jboss-cli 🚀 "
-                    sudo bash $JBOSS_HOME/bin/standalone.sh
+                    nohup sudo bash $JBOSS_HOME/bin/standalone.sh > /dev/null 2>&1 &
+                    sleep 60
+
+                    echo "🛠 Configurar usuario de administración en JBoss 🚀 "
+
+                    # Cambiar permisos antes de ejecutar add-user.sh
+                    sudo chown -R jboss:jboss $JBOSS_HOME
+                    sudo chmod -R u+rwX,g+rX,o-rwx $JBOSS_HOME
+
+                    sudo -u jboss $JBOSS_HOME/bin/add-user.sh \
+                        jbossadmin admin123! --silent || { echo "❌ Error al agregar usuario"; exit 1; }
+                    echo "✅ Usuario agregado correctamente en JBoss."
+
+                    echo "==== Buscando Procesos JBoss para detenerlo 🕵️ ====="
+                    JBOSS_PID=$(pgrep -f "java .*jboss")
+
+                    if [ -n "$JBOSS_PID" ]; then
+                        echo "🔴 Deteniendo proceso JBoss con PID: $JBOSS_PID 🔴"
+                        sudo kill -9 $JBOSS_PID
+                    else
+                        echo " ⚠️ No se encontraron procesos JBoss en ejecución. ⚠️"
+                    fi  # 🔹 Cierre correcto del bloque if
+
+                    echo "🛠 Configurando nodo standalone 🚀"
+
+
+                    # Obtener la IP privada de la instancia EC2
+                    NODE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+
+                    # Ejecutar el script con la IP de forma automática
+                    echo "$NODE_IP" | sudo -u jboss $JBOSS_HOME/standalone/scripts/configurar-nodo-standalone.sh || { echo "❌ Error al configurar nodo"; exit 1; }
+
+                    echo "✅ Configuración del nodo JBoss completada con IP: $NODE_IP"
+
+                    echo "Levantando Nuevamente jboss-cli 🚀 "
+                    nohup sudo bash $JBOSS_HOME/bin/standalone.sh > /dev/null 2>&1 &
+                    sleep 60
+
+                    echo "======= Instalacion de Parches JBOSS 🚀 ========"
+                    sudo $JBOSS_HOME/bin/jboss-cli.sh --connect <<< "patch apply /home/jboss/instalacion_standalone_HCIS4/jboss/jboss-eap-7.4.2-patch.zip"
+
+                    if [ $? -eq 0 ]; then
+                        echo "✅ Parche aplicado correctamente."
+                    else
+                        echo "❌ Error al aplicar el parche."
+                        exit 1
+                    fi
+
+                    echo "🔄 Reiniciando JBoss..."
+                    sudo pkill -f "java .*jboss"
+                    sleep 5
+                    nohup sudo bash $JBOSS_HOME/bin/standalone.sh > /dev/null 2>&1 &
+                    sleep 60  # Esperar a que levante completamente
+                    echo "✅ JBoss reiniciado correctamente."
+
+                    echo "💾 Eliminando conexión anterior de OracleDS..."
+                    sudo $JBOSS_HOME/bin/jboss-cli.sh --connect <<< "/subsystem=datasources/data-source=OracleDS:remove"
+
+                    echo "🛠 Agregando nueva configuración de OracleDS..."
+                    sudo $JBOSS_HOME/bin/jboss-cli.sh --connect <<< "/subsystem=datasources/data-source=OracleDS:add(use-ccm=true,use-java-context=true,connection-url=\"jdbc:oracle:thin:@(DESCRIPTION=(ENABLE=BROKEN)(ADDRESS=(PROTOCOL=TCP)(PORT=1521)(HOST=10.196.65.145))(CONNECT_DATA=(SERVICE_NAME=hcisdb)))\",driver-name=oracle,new-connection-sql=\"alter session set NLS_DATE_FORMAT='YYYY-MM-DD'\",pool-prefill=true,pool-use-strict-min=true,min-pool-size=4,max-pool-size=60,user-name=HCISHEADTES_LATAM452,password=hcisheadtes,flush-strategy=IdleConnections,idle-timeout-minutes=5,check-valid-connection-sql=\"select 1 from dual\",stale-connection-checker-class-name=org.jboss.jca.adapters.jdbc.extensions.oracle.OracleStaleConnectionChecker,exception-sorter-class-name=org.jboss.jca.adapters.jdbc.extensions.oracle.OracleExceptionSorter,jndi-name=java:/jdbc/imaestros,background-validation=true,background-validation-millis=120000)"
+
+                    echo "✅ Configuración de OracleDS completada."
+
+                    echo "🔄 Deteniendo JBoss..."
+                    sudo pkill -f "java .*jboss"
+                    sleep 5
+
+                    echo "Copiando archivo .ear a $JBOSS_HOME/standalone/scripts/desplegarEAR/EAR/"
+                    cp /home/jboss/instalacion_standalone_HCIS4/ear/hcis.ear $JBOSS_HOME/standalone/scripts/desplegarEAR/EAR/ || { echo "❌ Error al copiar hcis.ear"; exit 1; }
+
+                    echo "****** Parar la instancia EC2 *******"
+                    sudo $JBOSS_HOME/standalone/scripts/stop-hcis.sh || { echo "❌ Error al detener HCIS"; exit 1; }
+
+                    echo "Puesta en marcha de HCIS Standalone completada. ✅"
+                    sudo $JBOSS_HOME/standalone/scripts/start-hcis.sh
+
+
+
+
+
+
+
+
+
+
 
             EOF
   user_data_replace_on_change = true
