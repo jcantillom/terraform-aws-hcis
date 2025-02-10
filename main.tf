@@ -288,10 +288,16 @@ resource "aws_instance" "hcis_ec2" {
                     cp /home/jboss/instalacion_standalone_HCIS4/ear/hcis.ear $JBOSS_HOME/standalone/scripts/desplegarEAR/EAR/ || { echo "❌ Error al copiar hcis.ear"; exit 1; }
 
                     echo "****** Parar la instancia EC2 *******"
-                    sudo $JBOSS_HOME/standalone/scripts/stop-hcis.sh || { echo "❌ Error al detener HCIS"; exit 1; }
+                    sudo -u jboss $JBOSS_HOME/standalone/scripts/stop-hcis.sh || { echo "❌ Error al detener HCIS"; exit 1; }
+
+                    echo "🔄 Despliegue 🚀"
+                    sudo -u jboss $JBOSS_HOME/standalone/scripts/desplegar-ear.sh || { echo "❌ Error al desplegar EAR"; exit 1; }
+
 
                     echo "Puesta en marcha de HCIS Standalone completada. ✅"
-                    sudo $JBOSS_HOME/standalone/scripts/start-hcis.sh
+                    sudo -u jboss $JBOSS_HOME/standalone/scripts/start-hcis.sh || { echo "❌ Error al iniciar HCIS"; exit 1; }
+
+
 
 
 
