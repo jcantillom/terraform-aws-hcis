@@ -1,0 +1,247 @@
+#!/bin/bash
+set -e
+LOGFILE="/var/log/user_data.log"
+exec > >(tee -a $LOGFILE) 2>&1
+
+echo "***** Iniciando instalación de HCIS Standalone *****"
+echo "♨️ Instalando oracle-epel-release-el8 💢 "
+sudo dnf install -y oracle-epel-release-el8 || { echo "❌ Error al instalar oracle-epel-release-el8"; exit 1; }
+
+echo "🕹️ Actualizando y paquetes necesarios 🕹️ "
+sudo dnf -y install java-1.8.0-openjdk wget unzip telnet firewalld net-tools htop tmux mc glibc-all-langpacks dos2unix tar || { echo "❌ Error al instalar paquetes necesarios"; exit 1; }
+sudo dnf -y update || { echo "❌ Error al actualizar paquetes"; exit 1; }
+
+echo "🌎 Configurando Idioma Local 🌎"
+nohup bash -c "sleep 60 && localectl set-locale es_ES.utf8" >/dev/null 2>&1 &
+
+echo "🇨🇴 Configurar Zona Horaria 🇨🇴"
+nohup bash -c "sleep 60 && timedatectl set-timezone America/Bogota" >/dev/null 2>&1 &
+
+echo "Paso 3: Instalando AWS CLI...🔐"
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install || { echo "ERROR: Falló la instalación de AWS CLI"; exit 1; }
+
+echo "Instlando Tar"
+sudo dnf install -y tar || { echo "❌ Error al instalar tar"; exit 1; }
+
+echo " Instalando otros paquetes Necesarios desde /tmp"
+cd /tmp
+wget https://rpms.remirepo.net/enterprise/remi-release-8.rpm || { echo "❌ Error al descargar remi-release-8.rpm"; exit 1; }
+sudo rpm -Uvh remi-release-8.rpm || { echo "❌ Error al instalar remi-release-8.rpm"; exit 1; }
+sudo dnf -y localinstall --nogpgcheck https://download1.rpmfusion.org/free/el/rpmfusion-free-release-8.noarch.rpm || { echo "❌ Error al instalar rpmfusion-free-release-8.noarch.rpm"; exit 1; }
+sudo dnf -y localinstall --nogpgcheck https://download1.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-8.noarch.rpm || { echo "❌ Error al instalar rpmfusion-nonfree-release-8.noarch.rpm"; exit 1; }
+
+echo "📝 Editar fichero /etc/sysconfig/selinux "
+sudo sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/sysconfig/selinux || { echo "❌ Error al deshabilitar SELinux"; exit 1; }
+sudo setenforce 0 || { echo "❌ Error al deshabilitar SELinux"; exit 1; }
+
+echo "⚙️Configurar Firewall"
+sudo systemctl start firewalld || { echo "❌ Error al iniciar firewalld"; exit 1; }
+sudo systemctl enable firewalld || { echo "❌ Error al habilitar firewalld"; exit 1; }
+sudo firewall-cmd --zone=public --add-port=8080/tcp --permanent || { echo "❌ Error al abrir puerto 8080"; exit 1; }
+sudo firewall-cmd --zone=public --add-port=8787/tcp --permanent || { echo "❌ Error al abrir puerto 8787"; exit 1; }
+sudo firewall-cmd --zone=public --add-port=9990/tcp --permanent || { echo "❌ Error al abrir puerto 9990"; exit 1; }
+sudo firewall-cmd --zone=public --add-port=9999/tcp --permanent || { echo "❌ Error al abrir puerto 9999"; exit 1; }
+sudo firewall-cmd --reload || { echo "❌ Error al recargar firewalld"; exit 1; }
+sudo systemctl stop firewalld || { echo "❌ Error al detener firewalld"; exit 1; }
+sudo systemctl disable firewalld || { echo "❌ Error al deshabilitar firewalld"; exit 1; }
+
+echo " 🚧 Crear archivo de configuración de SO 🚧 "
+sudo bash -c 'cat << SYSCTL_EOF > /etc/sysctl.d/98-jboss.conf
+# /etc/sysctl.d/98-jboss.conf
+#
+# Network tuning
+net.core.rmem_default = 260096
+net.core.wmem_default = 260096
+net.core.rmem_max = 262143
+net.core.wmem_max = 262143
+net.core.netdev_max_backlog = 10000
+net.core.somaxconn = 4096
+net.ipv4.tcp_synack_retries = 2
+net.ipv4.tcp_max_syn_backlog = 8192
+net.ipv4.tcp_rmem = 4096 87380 8388608
+net.ipv4.tcp_wmem = 4096 65535 8388608
+net.ipv4.tcp_mem = 196608 262144 393216
+net.ipv4.tcp_fin_timeout = 30
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_keepalive_time = 900
+net.ipv4.tcp_keepalive_intvl = 60
+net.ipv4.tcp_keepalive_probes = 12
+# VM tuning
+vm.swappiness = 1
+SYSCTL_EOF'
+
+echo "Aplicar configuración de SO 🏆"
+sudo sysctl -p /etc/sysctl.d/98-jboss.conf || { echo "❌ Error al aplicar configuración de SO"; exit 1; }
+
+echo "⚓️ Creación de 99-custom.conf ⚓️"
+sudo bash -c 'cat << LIMITS_EOF > /etc/security/limits.d/99-custom.conf
+# /etc/security/limits.d/99-custom.conf
+#
+jboss hard nofile 65536
+jboss soft nofile 16384
+LIMITS_EOF'
+echo "Configuración de límites completada.✅"
+echo "👨🏻 Creando Usuario jboss 👨🏻"
+sudo useradd jboss || { echo "❌ Error al crear usuario jboss"; exit 1; }
+
+echo "======= Configurar .bashrc para el usuario jboss========="
+sudo bash -c 'cat << BASHRC_EOF >> /home/jboss/.bashrc
+# ---------------------------------------------------------------------
+# User specific aliases and functions
+# ---------------------------------------------------------------------
+export JAVA_HOME=/usr/lib/jvm/jre-1.8.0
+export PATH=\$PATH:\$JAVA_HOME/bin
+export JBOSS_HOME=/hcis/apps/jboss-eap-7.4
+export PATH=\$PATH:\$JBOSS_HOME/bin
+export HCIS_LOG=/hcis/logs
+# ---------------------------------------------------------------------
+# Personalización shell linux (opcional)
+# ---------------------------------------------------------------------
+HISTTIMEFORMAT="+%F %T "
+#export PS1="\[\e[0;32m[\]\u@\h \w]$ \[\e[m\]"
+#umask 0022
+# ---------------------------------------------------------------------
+# Opción sacada de una instalación pendiente de validar
+# ---------------------------------------------------------------------
+#JAVA_OPTIONS="-Djava.security.egd=file:/dev/./urandom -Djava.net.preferIPv4Stack=true"
+
+# Some more ls aliases
+alias ll="ls -alF"
+alias la="ls -A"
+alias l="ls -CF"
+alias vim="vi"
+BASHRC_EOF'
+
+echo "Cambiar permisos para asegurar que jboss tiene acceso..."
+sudo chown jboss:jboss /home/jboss/.bashrc
+sudo chmod 644 /home/jboss/.bashrc
+
+echo "Configuración de .bashrc para jboss completada.✅"
+
+echo "Crear directorios de instalación 🗂️"
+sudo mkdir -p /hcis/
+sudo mkdir -p /hcis/apps
+sudo mkdir -p /hcis/logs
+
+echo "Asignar permisos a los directorios 📂 "
+sudo chown -R jboss:jboss /hcis
+sudo chmod -R 755 /hcis/
+
+echo "Descargar archivos de instalación desde S3 ⬇️ "
+sudo chown -R ec2-user:ec2-user /home/jboss/
+sudo chmod -R 755 /home/jboss/
+BUCKET_NAME="${BUCKET_NAME}"
+aws s3 cp s3://$BUCKET_NAME/instalacion_standalone_HCIS4.tar.gz /home/jboss/ || echo "ERROR: No se pudo descargar instalacion_standalone_HCIS4.tar.gz" >> /var/log/user_data.log
+aws s3 cp s3://$BUCKET_NAME/hcis.ear /home/jboss/ || echo "ERROR: No se pudo descargar hcis.ear" >> /var/log/user_data.log
+
+sudo chown jboss:jboss /home/jboss/instalacion_standalone_HCIS4.tar.gz
+sudo chown jboss:jboss /home/jboss/hcis.ear
+
+echo "***** Descomprimir archivos de instalación ⏳ *****"
+sudo tar -xvzf /home/jboss/instalacion_standalone_HCIS4.tar.gz -C /home/jboss/ || { echo "❌ Error al descomprimir instalacion_standalone_HCIS4.tar.gz"; exit 1; }
+
+echo "****** Mover el .EAR a instalacion_standalone_HCIS4/ear/ y cambiar permisos ****"
+sudo mv /home/jboss/hcis.ear /home/jboss/instalacion_standalone_HCIS4/ear/ || { echo "❌ Error al mover hcis.ear"; exit 1; }
+sudo chmod -R 775 /home/jboss/instalacion_standalone_HCIS4/ || { echo "❌ Error al cambiar permisos"; exit 1; }
+
+echo "==== LLevar paquete jboss-eap-7.4 a /hcis/apps/ y descomprimir ====="
+cd /hcis/apps/ && sudo cp /home/jboss/instalacion_standalone_HCIS4/jboss/jboss-eap-7.4.0.zip . || { echo "❌ Error al copiar jboss-eap-7.4.0.zip"; exit 1; }
+sudo unzip jboss-eap-7.4.0.zip || { echo "❌ Error al descomprimir jboss-eap-7.4.0.zip"; exit 1; }
+sudo chown -R jboss:jboss /hcis/
+sudo chmod -R 775 /hcis/
+
+echo "Variables de entorno 🖥️"
+echo $JBOSS_HOME
+export JBOSS_HOME="/hcis/apps/jboss-eap-7.4"
+echo 'export JBOSS_HOME="/hcis/apps/jboss-eap-7.4"' | sudo tee -a /etc/profile
+source /etc/profile
+
+echo " ========== Instalar Scripts ============"
+cd $JBOSS_HOME/ && sudo cp /home/jboss/instalacion_standalone_HCIS4/scripts/scripts_standalone_hcis4.tar.gz .
+sudo tar -xvzf $JBOSS_HOME/scripts_standalone_hcis4.tar.gz
+sudo rm -rf $JBOSS_HOME/scripts_standalone_hcis4.tar.gz
+sudo chmod -R 750 $JBOSS_HOME/standalone/scripts/
+
+echo "Configurar jboss-cli 🚀 "
+nohup sudo bash $JBOSS_HOME/bin/standalone.sh > /dev/null 2>&1 &
+sleep 60
+
+echo "🛠 Configurar usuario de administración en JBoss 🚀 "
+
+# Cambiar permisos antes de ejecutar add-user.sh
+sudo chown -R jboss:jboss $JBOSS_HOME
+sudo chmod -R u+rwX,g+rX,o-rwx $JBOSS_HOME
+
+sudo -u jboss $JBOSS_HOME/bin/add-user.sh \
+    jbossadmin admin123! --silent || { echo "❌ Error al agregar usuario"; exit 1; }
+echo "✅ Usuario agregado correctamente en JBoss."
+
+echo "==== Buscando Procesos JBoss para detenerlo 🕵️ ====="
+JBOSS_PID=$(pgrep -f "java .*jboss")
+
+if [ -n "$JBOSS_PID" ]; then
+    echo "🔴 Deteniendo proceso JBoss con PID: $JBOSS_PID 🔴"
+    sudo kill -9 $JBOSS_PID
+else
+    echo " ⚠️ No se encontraron procesos JBoss en ejecución. ⚠️"
+fi  # 🔹 Cierre correcto del bloque if
+
+echo "🛠 Configurando nodo standalone 🚀"
+
+
+# Obtener la IP privada de la instancia EC2
+NODE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+
+# Ejecutar el script con la IP de forma automática
+echo "$NODE_IP" | sudo -u jboss $JBOSS_HOME/standalone/scripts/configurar-nodo-standalone.sh || { echo "❌ Error al configurar nodo"; exit 1; }
+
+echo "✅ Configuración del nodo JBoss completada con IP: $NODE_IP"
+
+echo "Levantando Nuevamente jboss-cli 🚀 "
+nohup sudo bash $JBOSS_HOME/bin/standalone.sh > /dev/null 2>&1 &
+sleep 60
+
+echo "======= Instalacion de Parches JBOSS 🚀 ========"
+sudo $JBOSS_HOME/bin/jboss-cli.sh --connect <<< "patch apply /home/jboss/instalacion_standalone_HCIS4/jboss/jboss-eap-7.4.2-patch.zip"
+
+if [ $? -eq 0 ]; then
+    echo "✅ Parche aplicado correctamente."
+else
+    echo "❌ Error al aplicar el parche."
+    exit 1
+fi
+
+echo "🔄 Reiniciando JBoss..."
+sudo pkill -f "java .*jboss"
+sleep 5
+nohup sudo bash $JBOSS_HOME/bin/standalone.sh > /dev/null 2>&1 &
+sleep 60  # Esperar a que levante completamente
+echo "✅ JBoss reiniciado correctamente."
+
+echo "💾 Eliminando conexión anterior de OracleDS..."
+sudo $JBOSS_HOME/bin/jboss-cli.sh --connect <<< "/subsystem=datasources/data-source=OracleDS:remove"
+
+echo "🛠 Agregando nueva configuración de OracleDS..."
+sudo $JBOSS_HOME/bin/jboss-cli.sh --connect <<< "/subsystem=datasources/data-source=OracleDS:add(use-ccm=true,use-java-context=true,connection-url=\"jdbc:oracle:thin:@(DESCRIPTION=(ENABLE=BROKEN)(ADDRESS=(PROTOCOL=TCP)(PORT=1521)(HOST=10.196.65.145))(CONNECT_DATA=(SERVICE_NAME=hcisdb)))\",driver-name=oracle,new-connection-sql=\"alter session set NLS_DATE_FORMAT='YYYY-MM-DD'\",pool-prefill=true,pool-use-strict-min=true,min-pool-size=4,max-pool-size=60,user-name=HCISHEADTES_LATAM452,password=hcisheadtes,flush-strategy=IdleConnections,idle-timeout-minutes=5,check-valid-connection-sql=\"select 1 from dual\",stale-connection-checker-class-name=org.jboss.jca.adapters.jdbc.extensions.oracle.OracleStaleConnectionChecker,exception-sorter-class-name=org.jboss.jca.adapters.jdbc.extensions.oracle.OracleExceptionSorter,jndi-name=java:/jdbc/imaestros,background-validation=true,background-validation-millis=120000)"
+
+echo "✅ Configuración de OracleDS completada."
+
+echo "🔄 Deteniendo JBoss..."
+sudo pkill -f "java .*jboss"
+sleep 5
+
+echo "Copiando archivo .ear a $JBOSS_HOME/standalone/scripts/desplegarEAR/EAR/"
+cp /home/jboss/instalacion_standalone_HCIS4/ear/hcis.ear $JBOSS_HOME/standalone/scripts/desplegarEAR/EAR/ || { echo "❌ Error al copiar hcis.ear"; exit 1; }
+
+echo "****** Parar la instancia EC2 *******"
+sudo -u jboss $JBOSS_HOME/standalone/scripts/stop-hcis.sh || { echo "❌ Error al detener HCIS"; exit 1; }
+
+echo "🔄 Despliegue 🚀"
+sudo -u jboss $JBOSS_HOME/standalone/scripts/desplegar-ear.sh || { echo "❌ Error al desplegar EAR"; exit 1; }
+
+
+echo "Puesta en marcha de HCIS Standalone completada. ✅"
+sudo -u jboss $JBOSS_HOME/standalone/scripts/start-hcis.sh || { echo "❌ Error al iniciar HCIS"; exit 1; }
+echo "🚀 HCIS Standalone iniciado correctamente. 🚀"
