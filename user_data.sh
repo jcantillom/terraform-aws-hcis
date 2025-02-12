@@ -133,8 +133,11 @@ echo "Descargar archivos de instalación desde S3 ⬇️ "
 sudo chown -R ec2-user:ec2-user /home/jboss/
 sudo chmod -R 755 /home/jboss/
 BUCKET_NAME="${BUCKET_NAME}"
-aws s3 cp s3://$BUCKET_NAME/instalacion_standalone_HCIS4.tar.gz /home/jboss/ || echo "ERROR: No se pudo descargar instalacion_standalone_HCIS4.tar.gz" >> /var/log/user_data.log
-aws s3 cp s3://$BUCKET_NAME/hcis.ear /home/jboss/ || echo "ERROR: No se pudo descargar hcis.ear" >> /var/log/user_data.log
+echo "📥 Descargando instalacion_standalone_HCIS4.tar.gz desde S3..."
+aws s3 cp s3://$BUCKET_NAME/instalacion_standalone_HCIS4.tar.gz /home/jboss/ || { echo "❌ Error al descargar instalacion_standalone_HCIS4.tar.gz"; exit 1; }
+
+echo "📥 Descargando hcis.ear desde S3..."
+aws s3 cp s3://$BUCKET_NAME/hcis.ear /home/jboss/ || { echo "❌ Error al descargar hcis.ear"; exit 1; }
 
 sudo chown jboss:jboss /home/jboss/instalacion_standalone_HCIS4.tar.gz
 sudo chown jboss:jboss /home/jboss/hcis.ear
@@ -244,4 +247,82 @@ sudo -u jboss $JBOSS_HOME/standalone/scripts/desplegar-ear.sh || { echo "❌ Err
 
 echo "Puesta en marcha de HCIS Standalone completada. ✅"
 sudo -u jboss $JBOSS_HOME/standalone/scripts/start-hcis.sh || { echo "❌ Error al iniciar HCIS"; exit 1; }
-echo "🚀 HCIS Standalone iniciado correctamente. 🚀"
+
+echo "📌 Creando el servicio systemd para JBoss..."
+
+# Crear el archivo del servicio
+echo "📝 Creando servicio jbosseap7.service para Systemd..."
+cat > /usr/lib/systemd/system/jbosseap7.service <<EOF
+[Unit]
+Description=JBoss EAP Systemctl script
+#Requires=oracle.service
+#After=network-online.target oracle.service
+After=network-online.target
+
+[Service]
+Type=forking
+Restart=no
+ExecStart=/hcis/apps/jboss-eap-7.4/standalone/scripts/hcisctl.sh start
+ExecStop=/hcis/apps/jboss-eap-7.4/standalone/scripts/hcisctl.sh stop
+ExecReload=/hcis/apps/jboss-eap-7.4/standalone/scripts/hcisctl.sh restart
+PIDFile=/hcis/apps/jboss-eap-7.4/standalone/run/jboss-standalone.pid
+User=jboss
+Group=jboss
+TimeoutStartSec=300
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo chown jboss:jboss /hcis/apps/jboss-eap-7.4/standalone/scripts/hcisctl.sh
+sudo chmod 755 /hcis/apps/jboss-eap-7.4/standalone/scripts/hcisctl.sh
+
+echo "🛠 Configurando sudoers para permitir a jboss controlar el servicio JBoss..."
+
+sudo tee /etc/sudoers.d/jboss <<EOF
+jboss ALL=(ALL) NOPASSWD: /bin/systemctl start jbosseap7.service
+jboss ALL=(ALL) NOPASSWD: /bin/systemctl stop jbosseap7.service
+jboss ALL=(ALL) NOPASSWD: /bin/systemctl status jbosseap7.service
+jboss ALL=(ALL) NOPASSWD: /bin/systemctl restart jbosseap7.service
+jboss ALL=(ALL) NOPASSWD: /bin/systemctl enable jbosseap7.service
+EOF
+
+sudo chmod 440 /etc/sudoers.d/jboss
+sudo chown root:root /etc/sudoers.d/jboss
+sudo ls -ld /hcis/apps/jboss-eap-7.4/standalone/run/
+sudo chown -R jboss:jboss /hcis/apps/jboss-eap-7.4/standalone/run/
+sudo chmod -R 755 /hcis/apps/jboss-eap-7.4/standalone/run/
+
+
+sudo visudo -c
+
+
+echo "✅ Archivo de sudoers configurado correctamente."
+
+echo "🔄 Esperando antes de reiniciar el servicio..."
+sleep 30
+
+echo "🔄 Desactivando SELinux temporalmente..."
+sudo setenforce 0
+
+echo "🔄 Recargando configuración de systemd..."
+#sudo systemctl daemon-reexec || { echo "❌ Error al recargar systemd"; exit 1; }
+sudo systemctl daemon-reload || { echo "❌ Error al recargar systemd daemon"; exit 1; }
+
+sudo systemctl enable jbosseap7.service || { echo "❌ Error al habilitar jbosseap7.service"; exit 1; }
+echo "🔄 Reiniciar servicio de JBoss..."
+sudo getenforce
+echo "🔧 Desactivando SELinux temporal y permanentemente..."
+sudo setenforce 0
+sudo systemctl daemon-reexec
+sudo systemctl restart jbosseap7.service
+sudo systemctl status jbosseap7.service
+
+
+echo "🔗 URL de acceso: http://$NODE_IP:8080/hphis"
+
+
+
+
+
+
