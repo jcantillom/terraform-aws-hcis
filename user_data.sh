@@ -238,27 +238,18 @@ sleep 5
 echo "Copiando archivo .ear a $JBOSS_HOME/standalone/scripts/desplegarEAR/EAR/"
 cp /home/jboss/instalacion_standalone_HCIS4/ear/hcis.ear $JBOSS_HOME/standalone/scripts/desplegarEAR/EAR/ || { echo "❌ Error al copiar hcis.ear"; exit 1; }
 
-echo "****** Parar la instancia EC2 *******"
-sudo -u jboss $JBOSS_HOME/standalone/scripts/stop-hcis.sh || { echo "❌ Error al detener HCIS"; exit 1; }
 
 echo "🔄 Despliegue 🚀"
 sudo -u jboss $JBOSS_HOME/standalone/scripts/desplegar-ear.sh || { echo "❌ Error al desplegar EAR"; exit 1; }
 
 
-echo "Puesta en marcha de HCIS Standalone completada. ✅"
-sudo -u jboss $JBOSS_HOME/standalone/scripts/start-hcis.sh || { echo "❌ Error al iniciar HCIS"; exit 1; }
-
-echo "📌 Creando el servicio systemd para JBoss..."
-
-# Crear el archivo del servicio
-echo "📝 Creando servicio jbosseap7.service para Systemd..."
-cat > /usr/lib/systemd/system/jbosseap7.service <<EOF
+# Crear el servicio en systemd
+sudo cat <<EOF | sudo tee /usr/lib/systemd/system/jbosseap7.service
 [Unit]
 Description=JBoss EAP Systemctl script
 #Requires=oracle.service
 #After=network-online.target oracle.service
 After=network-online.target
-
 [Service]
 Type=forking
 Restart=no
@@ -270,59 +261,26 @@ User=jboss
 Group=jboss
 TimeoutStartSec=300
 TimeoutStopSec=300
-
 [Install]
 WantedBy=multi-user.target
 EOF
-sudo chown jboss:jboss /hcis/apps/jboss-eap-7.4/standalone/scripts/hcisctl.sh
-sudo chmod 755 /hcis/apps/jboss-eap-7.4/standalone/scripts/hcisctl.sh
 
-echo "🛠 Configurando sudoers para permitir a jboss controlar el servicio JBoss..."
+# Agregar reglas de sudo para jboss de manera segura
+sudo bash -c 'echo "jboss ALL= NOPASSWD: /bin/systemctl start jbosseap7.service" >> /etc/sudoers'
+sudo bash -c 'echo "jboss ALL= NOPASSWD: /bin/systemctl stop jbosseap7.service" >> /etc/sudoers'
+sudo bash -c 'echo "jboss ALL= NOPASSWD: /bin/systemctl status jbosseap7.service" >> /etc/sudoers'
+sudo bash -c 'echo "jboss ALL= NOPASSWD: /bin/systemctl restart jbosseap7.service" >> /etc/sudoers'
+sudo bash -c 'echo "jboss ALL= NOPASSWD: /bin/systemctl enable jbosseap7.service" >> /etc/sudoers'
 
-sudo tee /etc/sudoers.d/jboss <<EOF
-jboss ALL=(ALL) NOPASSWD: /bin/systemctl start jbosseap7.service
-jboss ALL=(ALL) NOPASSWD: /bin/systemctl stop jbosseap7.service
-jboss ALL=(ALL) NOPASSWD: /bin/systemctl status jbosseap7.service
-jboss ALL=(ALL) NOPASSWD: /bin/systemctl restart jbosseap7.service
-jboss ALL=(ALL) NOPASSWD: /bin/systemctl enable jbosseap7.service
-EOF
+# Verificar que la sintaxis del archivo sudoers es correcta antes de continuar
+sudo visudo -c || { echo "❌ Error en /etc/sudoers. Restaurando backup."; sudo cp /etc/sudoers.bak /etc/sudoers; exit 1; }
 
-sudo chmod 440 /etc/sudoers.d/jboss
-sudo chown root:root /etc/sudoers.d/jboss
-sudo ls -ld /hcis/apps/jboss-eap-7.4/standalone/run/
-sudo chown -R jboss:jboss /hcis/apps/jboss-eap-7.4/standalone/run/
-sudo chmod -R 755 /hcis/apps/jboss-eap-7.4/standalone/run/
+# Habilitar el servicio en systemd
+sudo systemctl daemon-reload
+sudo systemctl enable jbosseap7.service
+sudo systemctl start jbosseap7.service
 
-
-sudo visudo -c
-
-
-echo "✅ Archivo de sudoers configurado correctamente."
-
-echo "🔄 Esperando antes de reiniciar el servicio..."
-sleep 30
-
-echo "🔄 Desactivando SELinux temporalmente..."
-sudo setenforce 0
-
-echo "🔄 Recargando configuración de systemd..."
-#sudo systemctl daemon-reexec || { echo "❌ Error al recargar systemd"; exit 1; }
-sudo systemctl daemon-reload || { echo "❌ Error al recargar systemd daemon"; exit 1; }
-
-sudo systemctl enable jbosseap7.service || { echo "❌ Error al habilitar jbosseap7.service"; exit 1; }
-echo "🔄 Reiniciar servicio de JBoss..."
-sudo getenforce
-echo "🔧 Desactivando SELinux temporal y permanentemente..."
-sudo setenforce 0
-sudo systemctl daemon-reexec
-sudo systemctl restart jbosseap7.service
-sudo systemctl status jbosseap7.service
-
-
+echo "🚀 HCIS Standalone instalado y configurado correctamente. ✅"
 echo "🔗 URL de acceso: http://$NODE_IP:8080/hphis"
 
-
-
-
-
-
+exit 0
